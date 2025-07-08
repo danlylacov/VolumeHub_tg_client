@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  localstack:
+    image: localstack/localstack:3.8.1
+    environment:
+      - SERVICES=s3
+      - EDGE_PORT=4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - LS_LOG=trace
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - ./init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - my_network
+
+  localstack-init:
+    image: localstack/localstack:3.8.1
+    depends_on:
+      localstack:
+        condition: service_healthy
+    entrypoint: /bin/sh -c
+    command: >
+      "sleep 5;
+      awslocal --endpoint-url=http://localstack:4566 s3 mb s3://my-local-bucket;
+      echo 'Bucket created'"
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - LOCALSTACK_HOSTNAME=localstack
+    networks:
+      - my_network
+
+  bot:
+    build: ./bot
+    ports:
+      - "5000:5000"
+    depends_on:
+      localstack:
+        condition: service_healthy
+      photo_service:
+        condition: service_started
+    environment:
+      - MAKING_PHOTO_SERVICE_URL=http://photo_service:8003/generate-image  # Переопределяем URL
+    volumes:
+      - ./bot:/app
+      - ./bot/__pycache__:/app/__pycache__
+    networks:
+      - my_network
+
+  photo_service:
+    build: ./making_photo_service
+    ports:
+      - "8003:8003"
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_ENDPOINT_URL=http://localstack:4566
+    depends_on:
+      localstack:
+        condition: service_healthy
+    volumes:
+      - ./making_photo_service:/app
+      - ./making_photo_service/__pycache__:/app/__pycache__
+      - ./making_photo_service/make_image:/app/make_image
+    networks:
+      - my_network
+
+volumes:
+  localstack-data:
+
+networks:
+  my_network:
+    driver: bridge
